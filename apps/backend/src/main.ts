@@ -26,11 +26,11 @@ async function bootstrap() {
   const port = Number(process.env.BACKEND_PORT) || 3001;
   await app.listen(port);
   // eslint-disable-next-line no-console
-  console.log(`[cinderella-backend] listening on :${port}/api`);
+  console.log(`[beba-backend] listening on :${port}/api`);
 }
 
 bootstrap().catch((err) => {
   // eslint-disable-next-line no-console
-  console.error('[cinderella-backend] failed to start:', err);
+  console.error('[beba-backend] failed to start:', err);
   process.exit(1);
 });

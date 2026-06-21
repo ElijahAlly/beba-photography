@@ -26,14 +26,14 @@ onMounted(async () => {
 
 <template>
   <div class="space-y-6">
-    <header class="flex items-end justify-between">
+    <header class="flex flex-wrap items-end justify-between gap-3">
       <div>
         <h1 class="font-serif text-3xl tracking-tight">Clients</h1>
         <p class="text-sm text-stone-500">The people you've shot for.</p>
       </div>
       <NuxtLink
         to="/clients/new"
-        class="rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
+        class="shrink-0 rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700"
       >
         + New client
       </NuxtLink>

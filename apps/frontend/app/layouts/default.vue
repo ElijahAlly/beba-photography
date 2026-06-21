@@ -5,15 +5,20 @@ const route = useRoute();
 
 await refresh();
 
+const menuOpen = ref(false);
+
 const navLinks = computed(() => [
-  { to: '/', label: 'Studio' },
+  { to: '/studio', label: 'Studio' },
   { to: '/shoots', label: 'Shoots' },
   { to: '/clients', label: 'Clients' },
   { to: '/my', label: 'Galleries' },
 ]);
 
 const isActive = (to: string) =>
-  to === '/' ? route.path === '/' : route.path === to || route.path.startsWith(to + '/');
+  route.path === to || route.path.startsWith(to + '/');
+
+// Close the mobile menu whenever the route changes.
+watch(() => route.fullPath, () => { menuOpen.value = false; });
 </script>
 
 <template>
@@ -22,7 +27,7 @@ const isActive = (to: string) =>
       <div class="mx-auto flex max-w-6xl items-center justify-between gap-6 px-6 py-3">
         <NuxtLink to="/" class="flex items-center gap-2 font-serif text-lg tracking-tight">
           <span class="text-rose-600">✦</span>
-          <span>cinderella<span class="text-stone-400">.photography</span></span>
+          <span>beba<span class="text-stone-400">.photography</span></span>
         </NuxtLink>
 
         <nav v-if="isAuthed" class="hidden items-center gap-1 text-sm sm:flex">
@@ -44,11 +49,11 @@ const isActive = (to: string) =>
         <div class="flex items-center gap-3">
           <div v-if="isAuthed" class="hidden text-right text-xs sm:block">
             <div class="text-stone-500">Signed in as</div>
-            <div class="truncate font-medium text-stone-900">{{ user?.email }}</div>
+            <div class="max-w-[12rem] truncate font-medium text-stone-900">{{ user?.email }}</div>
           </div>
           <button
             v-if="isAuthed"
-            class="rounded-md border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-100"
+            class="hidden rounded-md border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-100 sm:inline-block"
             @click="logout"
           >
             Sign out
@@ -60,27 +65,57 @@ const isActive = (to: string) =>
           >
             Sign in
           </button>
+
+          <!-- Mobile menu toggle (authed only) -->
+          <button
+            v-if="isAuthed"
+            class="-mr-2 flex h-10 w-10 items-center justify-center text-stone-700 sm:hidden"
+            :aria-expanded="menuOpen"
+            aria-label="Toggle menu"
+            @click="menuOpen = !menuOpen"
+          >
+            <svg v-if="!menuOpen" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+            <svg v-else width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="M5 5l14 14M19 5L5 19"/></svg>
+          </button>
         </div>
       </div>
 
-      <nav
-        v-if="isAuthed"
-        class="flex items-center gap-1 overflow-x-auto border-t border-stone-100 px-6 py-2 text-xs sm:hidden"
+      <!-- Mobile menu panel -->
+      <Transition
+        enter-active-class="transition duration-200 ease-out"
+        enter-from-class="opacity-0 -translate-y-2"
+        leave-active-class="transition duration-150 ease-in"
+        leave-to-class="opacity-0 -translate-y-2"
       >
-        <NuxtLink
-          v-for="link in navLinks"
-          :key="link.to"
-          :to="link.to"
-          class="whitespace-nowrap rounded-md px-3 py-1.5 font-medium"
-          :class="
-            isActive(link.to)
-              ? 'bg-stone-900 text-white'
-              : 'text-stone-600 hover:bg-stone-100'
-          "
-        >
-          {{ link.label }}
-        </NuxtLink>
-      </nav>
+        <nav v-if="isAuthed && menuOpen" class="border-t border-stone-100 bg-white px-4 pb-4 pt-2 sm:hidden">
+          <NuxtLink
+            v-for="link in navLinks"
+            :key="link.to"
+            :to="link.to"
+            class="block rounded-lg px-4 py-3 text-base font-medium transition-colors"
+            :class="
+              isActive(link.to)
+                ? 'bg-stone-900 text-white'
+                : 'text-stone-700 hover:bg-stone-100'
+            "
+          >
+            {{ link.label }}
+          </NuxtLink>
+
+          <div class="mt-3 flex items-center justify-between gap-3 border-t border-stone-100 px-4 pt-4">
+            <div class="min-w-0 text-xs">
+              <div class="text-stone-500">Signed in as</div>
+              <div class="truncate font-medium text-stone-900">{{ user?.email }}</div>
+            </div>
+            <button
+              class="shrink-0 rounded-md border border-stone-300 bg-white px-3 py-1.5 text-xs font-medium text-stone-700 hover:bg-stone-100"
+              @click="logout"
+            >
+              Sign out
+            </button>
+          </div>
+        </nav>
+      </Transition>
     </header>
 
     <main class="mx-auto max-w-6xl px-6 py-8">

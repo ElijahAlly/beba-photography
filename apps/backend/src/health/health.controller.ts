@@ -4,6 +4,6 @@ import { Controller, Get } from '@nestjs/common';
 export class HealthController {
   @Get()
   check() {
-    return { ok: true, service: 'cinderella-backend', ts: new Date().toISOString() };
+    return { ok: true, service: 'beba-backend', ts: new Date().toISOString() };
   }
 }
