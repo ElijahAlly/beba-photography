@@ -19,10 +19,39 @@ async function bootstrap() {
   );
   app.setGlobalPrefix('api');
 
-  const frontendOrigin = process.env.FRONTEND_ORIGIN || 'http://localhost:3000';
+  // CORS: the frontend lives on a different host than the API (e.g.
+  // beba.photography → api.beba.photography), so every browser request is
+  // cross-origin and needs an explicit allow. FRONTEND_ORIGIN is a
+  // comma-separated allowlist; we also accept any *subdomain* of a listed
+  // origin so vanity studio subdomains (elijah.beba.photography) work without
+  // listing each one. Trailing slashes are tolerated.
+  const allowedOrigins = (
+    process.env.FRONTEND_ORIGIN || 'http://localhost:3002,http://localhost:3000'
+  )
+    .split(',')
+    .map((s) => s.trim().replace(/\/$/, ''))
+    .filter(Boolean);
+
+  const hostnameOf = (origin: string): string => {
+    try {
+      return new URL(origin).hostname;
+    } catch {
+      return '';
+    }
+  };
+  const allowedHosts = allowedOrigins.map(hostnameOf).filter(Boolean);
+
   app.enableCors({
-    origin: frontendOrigin.split(',').map((s) => s.trim()),
     credentials: true,
+    origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+      // No Origin header = same-origin nav, curl, or server-to-server (Stripe).
+      if (!origin) return cb(null, true);
+      const normalized = origin.replace(/\/$/, '');
+      if (allowedOrigins.includes(normalized)) return cb(null, true);
+      const host = hostnameOf(origin);
+      const ok = allowedHosts.some((h) => host === h || host.endsWith(`.${h}`));
+      return cb(null, ok);
+    },
   });
 
   const port = Number(process.env.BACKEND_PORT) || 3001;
