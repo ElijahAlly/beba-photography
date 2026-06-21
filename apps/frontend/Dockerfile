@@ -8,12 +8,17 @@ COPY apps/frontend/package.json apps/frontend/
 COPY apps/backend/package.json apps/backend/
 COPY packages/database/package.json packages/database/
 COPY packages/api-types/package.json packages/api-types/
-RUN pnpm install --frozen-lockfile
+# --prod=false: Coolify passes NODE_ENV=production as a build arg, which would
+# make pnpm skip devDependencies — but tsc/nuxt are devDeps we need to build.
+# Force a full install regardless of NODE_ENV.
+RUN pnpm install --frozen-lockfile --prod=false
 
 FROM base AS build
-COPY --from=deps /workspace/node_modules ./node_modules
-COPY --from=deps /workspace/apps/frontend/node_modules ./apps/frontend/node_modules
-COPY --from=deps /workspace/packages/api-types/node_modules ./packages/api-types/node_modules
+# Copy the whole installed workspace in one shot (pnpm may not create a local
+# node_modules for a package whose deps hoist to the root store, e.g.
+# api-types — copying it explicitly fails the build). `node_modules` is in
+# .dockerignore, so `COPY . .` overlays source without clobbering this.
+COPY --from=deps /workspace ./
 COPY . .
 
 # Shared types need to be compiled before Nuxt can resolve them.

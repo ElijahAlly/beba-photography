@@ -10,9 +10,10 @@ hand-rolled nginx + certbot here; it would collide with `coolify-proxy` over 80/
 > shape for Coolify. Coolify can also manage routing for you from the dashboard, in which
 > case the labels are optional.
 
-> **Single host, same origin.** Serve the Nuxt frontend and the Nest backend under **one**
-> hostname, `beba.photography`, with `/api/*` → backend. The session cookie is
-> `sameSite=lax` and CORS is same-origin, so they must share the hostname.
+> **Two hostnames, one registrable domain.** Frontend on `beba.photography`, backend on
+> `api.beba.photography`. They must be **different** hosts (Coolify/Traefik routers can't
+> share one), but because they share the registrable domain `beba.photography`, the
+> `sameSite=lax` session cookie still rides along. CORS is handled by `FRONTEND_ORIGIN`.
 
 ---
 
@@ -36,7 +37,7 @@ won't work no matter how cleanly cinderella deploys:
 ```
 JWT_SECRET=<prod value>                       # same value goes in cinderella below
 CINDERELLA_OAUTH_CLIENT_SECRET=<prod value>   # same value goes in cinderella below
-CINDERELLA_OAUTH_REDIRECT_URIS=https://beba.photography/api/auth/callback
+CINDERELLA_OAUTH_REDIRECT_URIS=https://api.beba.photography/api/auth/callback
 ```
 
 Generate secrets once: `openssl rand -base64 48` (JWT), `openssl rand -base64 32` (client
@@ -46,11 +47,14 @@ secret). Use **different** values than local dev.
 
 ## Phase 1 — DNS
 
-Point the domain at this server's IP (the same Hetzner box running gpa-pics):
+Point the domain (and the `api` subdomain) at this server's IP (the same Hetzner box
+running gpa-pics):
 
-- [ ] `A  @    → SERVER_IP`
+- [ ] `A  @    → SERVER_IP`   (frontend, beba.photography)
 - [ ] `A  www  → SERVER_IP`
-- [ ] Verify before deploying: `dig +short beba.photography` returns `SERVER_IP`.
+- [ ] `A  api  → SERVER_IP`   (backend, api.beba.photography)
+- [ ] Verify before deploying: `dig +short beba.photography` and
+      `dig +short api.beba.photography` both return `SERVER_IP`.
 
 Coolify issues the Let's Encrypt cert automatically once DNS resolves and the domain is set
 on the resource (Phase 3) — no certbot.
@@ -68,21 +72,28 @@ In the Coolify dashboard (`http://SERVER_IP:8000`):
 - [ ] Leave the `db` / `redis` services in for a self-contained stack, **or** delete them
       and use a dedicated Coolify Postgres/Redis resource (see Phase 5).
 
-## Phase 3 — Domains & routing (same host, path split)
+## Phase 3 — Domains & routing (subdomain split)
 
-Set this in the Coolify service settings (not nginx):
+In Coolify, the Docker Compose resource shows a **domain field per service**. Give the two
+services **different hostnames** — they must not share a host, or Traefik routers collide:
 
-- [ ] **frontend** service → domain `https://beba.photography`, port `3000`.
-- [ ] **backend** service → domain `https://beba.photography`, **path `/api`**, port
-      `3001`. Path-based routing keeps everything same-origin so the session cookie works.
-- [ ] Enable **“Generate SSL / Let's Encrypt”** on the domain. Traefik provisions the cert.
+- [ ] **Domains for frontend** → `https://beba.photography` (Coolify maps it to the
+      `frontend` service on port `3000`).
+- [ ] **Domains for backend** → `https://api.beba.photography` (maps to `backend` on
+      port `3001`).
+- [ ] Coolify auto-issues Let's Encrypt certs for both hostnames once DNS resolves.
 - [ ] (Optional) add `www.beba.photography` → redirect to the apex.
 
-> If your Coolify version doesn't do path routing cleanly, the fallback is a subdomain
-> split: backend on `api.beba.photography`, and set `NUXT_PUBLIC_API_BASE` +
-> `FRONTEND_ORIGIN` to match. Same registrable domain, so `sameSite=lax` cookies still
-> ride along — but set `OAUTH_REDIRECT_URI` to whichever host actually serves
-> `/api/auth/callback`, and register that exact URI in family-trees.
+> **Why a subdomain, not a `/api` path:** NestJS already serves under a global `/api`
+> prefix. Coolify's proxy strips a routed path prefix before forwarding, which would turn
+> `/api/auth/...` into `/auth/...` and 404 every route. A dedicated `api.` host avoids
+> that. `beba.photography` and `api.beba.photography` share one registrable domain, so the
+> `sameSite=lax` session cookie still rides along; CORS is handled by `FRONTEND_ORIGIN`.
+
+The browser flow that makes this work: the frontend (`beba.photography`) calls the backend
+at `api.beba.photography` with `credentials: include`. OAuth callback is served by the
+backend, so it lands on `api.beba.photography/api/auth/callback`; the backend sets the
+session cookie on the `api.` host and redirects back to a `beba.photography` page.
 
 ## Phase 4 — Environment variables (Coolify → each service)
 
@@ -94,7 +105,7 @@ REDIS_URL=redis://<coolify-redis-host>:6379
 JWT_SECRET=<same as family-trees prod>
 OAUTH_CLIENT_ID=cinderella
 OAUTH_CLIENT_SECRET=<same as family-trees CINDERELLA_OAUTH_CLIENT_SECRET>
-OAUTH_REDIRECT_URI=https://beba.photography/api/auth/callback
+OAUTH_REDIRECT_URI=https://api.beba.photography/api/auth/callback
 OAUTH_SCOPES=profile photos:read photos:write
 
 IDP_AUTHORIZE_URL=https://mytrees.family/oauth/authorize
@@ -106,7 +117,7 @@ PHOTOS_API_KEY=<from the gpapics / photos admin on this server>
 
 BACKEND_PORT=3001
 FRONTEND_ORIGIN=https://beba.photography
-NUXT_PUBLIC_API_BASE=https://beba.photography
+NUXT_PUBLIC_API_BASE=https://api.beba.photography
 ```
 
 > `NUXT_PUBLIC_API_BASE` is baked in at **build** time — change it and you must
@@ -137,10 +148,11 @@ Give cinderella its own:
 
 ## Phase 7 — Smoke test
 
-- [ ] `curl https://beba.photography/api/health` → ok, **no cert warning**.
-- [ ] Open the site → **Sign in** → lands on `mytrees.family/oauth/authorize` consent →
-      approve → bounces to `/api/auth/callback` → home, logged in.
-- [ ] `https://beba.photography/api/auth/me` returns your user (session JWT valid).
+- [ ] `curl https://api.beba.photography/api/health` → ok, **no cert warning**.
+- [ ] Open `https://beba.photography` → **Sign in** → lands on
+      `mytrees.family/oauth/authorize` consent → approve → bounces to
+      `api.beba.photography/api/auth/callback` → home, logged in.
+- [ ] `https://api.beba.photography/api/auth/me` returns your user (session JWT valid).
 - [ ] Create a shoot, upload a photo (proxies to photos.mytrees.family), **Mark as paid**,
       confirm ownership transfers.
 
@@ -156,11 +168,13 @@ Push to the tracked branch → Coolify auto-deploys (or click **Redeploy**). Run
 | Symptom | Cause / fix |
 | --- | --- |
 | Cert not issued / TLS error | DNS isn't resolving to this server yet, or Let's Encrypt isn't enabled on the domain in Coolify. Fix DNS, re-trigger SSL. |
-| 404 / wrong app on the domain | Two Coolify resources claim overlapping host+path. Make sure only cinderella's frontend owns `beba.photography` and backend owns `…/api`. |
+| 404 / wrong app on the domain | The two services share a hostname. Frontend must own `beba.photography`, backend must own `api.beba.photography` — not the same host. |
+| API 404s on every route | Backend was put on a `/api` *path* and the proxy stripped the prefix. Use the `api.beba.photography` subdomain instead (this is why we don't use a path). |
 | `redirect_uri mismatch` | family-trees prod missing/incorrect `CINDERELLA_OAUTH_REDIRECT_URIS`. Set it, restart family-trees so its OAuth seed re-runs. |
 | `Invalid identity token` / 401 on callback | `JWT_SECRET` differs between cinderella and family-trees. Make them identical. |
 | `client_secret invalid` on token exchange | `OAUTH_CLIENT_SECRET` (here) ≠ `CINDERELLA_OAUTH_CLIENT_SECRET` (family-trees). |
-| Cookie not set after callback | Frontend and `/api` resolved to different hosts. Keep both on `beba.photography` (path split), or use the subdomain fallback consistently. |
+| Cookie not set after callback | `OAUTH_REDIRECT_URI`, `NUXT_PUBLIC_API_BASE`, and the family-trees registered URI must all point at `api.beba.photography`. A mismatch means the cookie is set on the wrong host. |
+| Backend crash-loops `Cannot find module 'reflect-metadata'` (or any dep) | The runtime image broke pnpm's symlinked `node_modules` by flattening them. Fixed in `apps/backend/Dockerfile` (runtime stage mirrors the workspace layout and runs `apps/backend/dist/main.js`). Rebuild after pulling the fix. |
 | Uploads 502 / fail | `PHOTOS_API_KEY` wrong, or photos.mytrees.family unreachable from the container. |
 
 ## Notes
@@ -171,6 +185,8 @@ Push to the tracked branch → Coolify auto-deploys (or click **Redeploy**). Run
 - **Don't share gpa-pics's database.** Give cinderella its own Postgres (Phase 5).
 - **Vanity subdomains** (`<studio>.beba.photography`) need a wildcard cert (DNS-01)
   and a wildcard host rule in Coolify/Traefik. Skip until you actually use them.
-- The repo's `docker-compose.prod.yml` Traefik labels target `api.beba.photography`
-  for the backend (subdomain split). If you go path-based instead (recommended), let
-  Coolify own routing and you can ignore those labels.
+- The repo's `docker-compose.prod.yml` carries Traefik labels using the **old**
+  `cinderella.photography` host (backend on `api.`, frontend on apex). Deploying via the
+  Coolify dashboard, you set the domains in the UI (Phase 3) and Coolify manages routing,
+  so those stale labels are ignored — update or delete them only if you switch to raw
+  `docker compose` with your own Traefik.

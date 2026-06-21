@@ -9,14 +9,20 @@ COPY apps/backend/package.json apps/backend/
 COPY apps/frontend/package.json apps/frontend/
 COPY packages/database/package.json packages/database/
 COPY packages/api-types/package.json packages/api-types/
-RUN pnpm install --frozen-lockfile
+# --prod=false: Coolify passes NODE_ENV=production as a build arg, which would
+# make pnpm skip devDependencies — but tsc/nest/drizzle-kit are devDeps we need
+# to build. Force a full install regardless of NODE_ENV.
+RUN pnpm install --frozen-lockfile --prod=false
 
 # --- build stage: compile shared packages, then the backend ---
 FROM base AS build
-COPY --from=deps /workspace/node_modules ./node_modules
-COPY --from=deps /workspace/apps/backend/node_modules ./apps/backend/node_modules
-COPY --from=deps /workspace/packages/database/node_modules ./packages/database/node_modules
-COPY --from=deps /workspace/packages/api-types/node_modules ./packages/api-types/node_modules
+# Copy the whole installed workspace (root + however pnpm laid out each
+# package's node_modules) in one shot. Copying per-package node_modules
+# individually breaks when pnpm hoists a package's deps to the root store and
+# doesn't create a local node_modules (e.g. api-types). `node_modules` is in
+# .dockerignore, so the following `COPY . .` overlays source without clobbering
+# what we copied here.
+COPY --from=deps /workspace ./
 COPY . .
 
 # Build shared packages first — they emit to dist/ which the backend's
@@ -29,23 +35,25 @@ RUN pnpm --filter @cinderella/backend build
 FROM node:22-alpine AS runtime
 WORKDIR /app
 RUN corepack enable
+ENV NODE_ENV=production
 
-# Backend compiled output
-COPY --from=build /workspace/apps/backend/dist ./dist
-COPY --from=build /workspace/apps/backend/package.json ./package.json
-
-# Shared package dist (the symlinks resolve through node_modules below)
-COPY --from=build /workspace/packages ./packages
-
-# Manifest + lockfile so the prod install can reproduce
+# IMPORTANT: keep the pnpm workspace layout *identical* to the build stage.
+# pnpm node_modules are symlinks (e.g. apps/backend/node_modules/reflect-metadata
+# -> ../../../node_modules/.pnpm/...). Flattening or relocating them breaks those
+# relative links at runtime. So we mirror the same directory tree under /app and
+# run from apps/backend, exactly where the symlinks expect to resolve.
+COPY --from=build /workspace/package.json ./package.json
 COPY --from=build /workspace/pnpm-lock.yaml ./pnpm-lock.yaml
 COPY --from=build /workspace/pnpm-workspace.yaml ./pnpm-workspace.yaml
-COPY --from=build /workspace/package.json ./root-package.json
-
-# Carry over the resolved node_modules — workspace symlinks point at ./packages.
 COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/apps/backend/node_modules ./node_modules-app
-RUN cp -rn ./node_modules-app/* ./node_modules/ 2>/dev/null || true && rm -rf ./node_modules-app
+
+# Shared workspace packages (their dist + their own symlinked node_modules).
+COPY --from=build /workspace/packages ./packages
+
+# The backend: compiled output, manifest, and its symlinked node_modules.
+COPY --from=build /workspace/apps/backend/dist ./apps/backend/dist
+COPY --from=build /workspace/apps/backend/package.json ./apps/backend/package.json
+COPY --from=build /workspace/apps/backend/node_modules ./apps/backend/node_modules
 
 EXPOSE 3001
-CMD ["node", "dist/main.js"]
+CMD ["node", "apps/backend/dist/main.js"]
