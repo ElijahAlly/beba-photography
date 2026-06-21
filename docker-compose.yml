@@ -51,12 +51,17 @@ services:
     build:
       context: .
       dockerfile: apps/frontend/Dockerfile
+      args:
+        # ssr:false bakes this into the client bundle at build time, so it MUST
+        # be a build arg. Defaults to localhost for the plain local stack;
+        # Coolify/prod substitutes NUXT_PUBLIC_API_BASE from the environment.
+        NUXT_PUBLIC_API_BASE: ${NUXT_PUBLIC_API_BASE:-http://localhost:3001}
     ports:
       - "3000:3000"
     env_file:
       - .env
     environment:
-      - NUXT_PUBLIC_API_BASE=http://localhost:3001
+      - NUXT_PUBLIC_API_BASE=${NUXT_PUBLIC_API_BASE:-http://localhost:3001}
     depends_on:
       - backend
 

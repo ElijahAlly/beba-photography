@@ -120,8 +120,13 @@ FRONTEND_ORIGIN=https://beba.photography
 NUXT_PUBLIC_API_BASE=https://api.beba.photography
 ```
 
-> `NUXT_PUBLIC_API_BASE` is baked in at **build** time — change it and you must
-> **rebuild** the frontend (a normal Coolify redeploy does this), not just restart.
+> **`NUXT_PUBLIC_API_BASE` must be a BUILD variable.** The frontend is `ssr: false`, so
+> Nuxt bakes this into the client bundle at build time — a runtime-only env var is ignored
+> by the browser and the app will call `http://localhost:3001`. The frontend Dockerfile
+> reads it as a build `ARG` and `docker-compose.yml` passes it through `build.args`. In
+> Coolify, set `NUXT_PUBLIC_API_BASE=https://api.beba.photography` and make sure it's
+> marked **available at build time** (Coolify "Build Variable"), then **redeploy** (a
+> rebuild, not just restart) so the new value is baked in.
 
 ## Phase 5 — Database
 
@@ -175,6 +180,7 @@ Push to the tracked branch → Coolify auto-deploys (or click **Redeploy**). Run
 | `client_secret invalid` on token exchange | `OAUTH_CLIENT_SECRET` (here) ≠ `CINDERELLA_OAUTH_CLIENT_SECRET` (family-trees). |
 | Cookie not set after callback | `OAUTH_REDIRECT_URI`, `NUXT_PUBLIC_API_BASE`, and the family-trees registered URI must all point at `api.beba.photography`. A mismatch means the cookie is set on the wrong host. |
 | Backend crash-loops `Cannot find module 'reflect-metadata'` (or any dep) | The runtime image broke pnpm's symlinked `node_modules` by flattening them. Fixed in `apps/backend/Dockerfile` (runtime stage mirrors the workspace layout and runs `apps/backend/dist/main.js`). Rebuild after pulling the fix. |
+| Login/links point at `http://localhost:3001` | `NUXT_PUBLIC_API_BASE` wasn't passed at **build** time (ssr:false bakes it in). Set it as a Coolify **build** variable and redeploy; the frontend Dockerfile + `docker-compose.yml build.args` now thread it through. |
 | Uploads 502 / fail | `PHOTOS_API_KEY` wrong, or photos.mytrees.family unreachable from the container. |
 
 ## Notes

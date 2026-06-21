@@ -14,6 +14,12 @@ COPY packages/api-types/package.json packages/api-types/
 RUN pnpm install --frozen-lockfile --prod=false
 
 FROM base AS build
+# With `ssr: false`, Nuxt bakes public runtimeConfig (apiBase) into the client
+# bundle at BUILD time — a runtime env var won't override it on the client. So the
+# public API URL must be present *here*, as a build arg. Compose/Coolify passes it.
+ARG NUXT_PUBLIC_API_BASE=http://localhost:3001
+ENV NUXT_PUBLIC_API_BASE=$NUXT_PUBLIC_API_BASE
+
 # Copy the whole installed workspace in one shot (pnpm may not create a local
 # node_modules for a package whose deps hoist to the root store, e.g.
 # api-types — copying it explicitly fails the build). `node_modules` is in
