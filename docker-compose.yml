@@ -1,0 +1,64 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: password
+      POSTGRES_DB: cinderella
+    ports:
+      - "5433:5432"  # 5433 so it doesn't collide with mytrees-family / photos
+    volumes:
+      - cinderella_postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U user -d cinderella"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6380:6379"
+
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+    ports:
+      - "3001:3001"
+    env_file:
+      - .env
+    environment:
+      - DATABASE_URL=postgres://user:password@db:5432/cinderella
+      - REDIS_URL=redis://redis:6379
+      - BACKEND_PORT=3001
+      # In the in-Docker stack the frontend is on host :3000 (not the dev :3002
+      # we use when running `pnpm dev` on the host). Override .env here.
+      - FRONTEND_ORIGIN=http://localhost:3000
+      # IDP runs at the production URLs when the stack is dockerized — local
+      # family-trees isn't part of this compose file.
+      - IDP_AUTHORIZE_URL=https://mytrees.family/oauth/authorize
+      - IDP_TOKEN_URL=https://mytrees.family/api/oauth/token
+      - IDP_USERINFO_URL=https://mytrees.family/api/oauth/userinfo
+      - OAUTH_REDIRECT_URI=http://localhost:3001/api/auth/callback
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_started
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      - NUXT_PUBLIC_API_BASE=http://localhost:3001
+    depends_on:
+      - backend
+
+volumes:
+  cinderella_postgres:

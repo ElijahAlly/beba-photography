@@ -1,0 +1,41 @@
+# Production overlay. Assumes:
+#   - DB/Redis are managed externally (DATABASE_URL, REDIS_URL in .env point at them)
+#   - Traefik (or similar) is fronting both apps on the `proxy` network
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: apps/backend/Dockerfile
+      target: runtime
+    restart: unless-stopped
+    networks:
+      - proxy
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cinderella-backend.rule=Host(`api.cinderella.photography`)"
+      - "traefik.http.routers.cinderella-backend.entrypoints=websecure"
+      - "traefik.http.routers.cinderella-backend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.cinderella-backend.loadbalancer.server.port=3001"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: apps/frontend/Dockerfile
+      target: runtime
+    restart: unless-stopped
+    networks:
+      - proxy
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.cinderella-frontend.rule=Host(`cinderella.photography`) || HostRegexp(`{sub:[a-z0-9-]+}.cinderella.photography`)"
+      - "traefik.http.routers.cinderella-frontend.entrypoints=websecure"
+      - "traefik.http.routers.cinderella-frontend.tls.certresolver=letsencrypt"
+      - "traefik.http.services.cinderella-frontend.loadbalancer.server.port=3000"
+
+networks:
+  proxy:
+    external: true
