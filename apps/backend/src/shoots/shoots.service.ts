@@ -1,6 +1,7 @@
 import {
   Inject,
   Injectable,
+  Logger,
   NotFoundException,
   ForbiddenException,
   BadRequestException,
@@ -14,12 +15,17 @@ import {
 } from '@cinderella/database';
 import { and, desc, eq } from 'drizzle-orm';
 import { MediaService } from '../media/media.service.js';
+import { PaymentsService } from '../payments/payments.service.js';
+import type { PaymentMethod } from '@cinderella/api-types';
 
 @Injectable()
 export class ShootsService {
+  private readonly logger = new Logger(ShootsService.name);
+
   constructor(
     @Inject(DRIZZLE) private readonly db: DrizzleDB,
     private readonly mediaService: MediaService,
+    private readonly payments: PaymentsService,
   ) {}
 
   private async photographerByUserId(mytreesUserId: string) {
@@ -69,7 +75,10 @@ export class ShootsService {
         scheduledFor: shoots.scheduledFor,
         location: shoots.location,
         totalPriceCents: shoots.totalPriceCents,
+        pricePackageId: shoots.pricePackageId,
         paidAt: shoots.paidAt,
+        paymentMethod: shoots.paymentMethod,
+        amountPaidCents: shoots.amountPaidCents,
         notes: shoots.notes,
         createdAt: shoots.createdAt,
         photographerId: shoots.photographerId,
@@ -103,6 +112,7 @@ export class ShootsService {
     scheduledFor?: string;
     location?: string;
     totalPriceCents?: number;
+    pricePackageId?: string;
     notes?: string;
   }) {
     const photographer = await this.photographerByUserId(args.mytreesUserId);
@@ -125,6 +135,7 @@ export class ShootsService {
         scheduledFor: args.scheduledFor ? new Date(args.scheduledFor) : null,
         location: args.location ?? null,
         totalPriceCents: args.totalPriceCents ?? 0,
+        pricePackageId: args.pricePackageId ?? null,
         notes: args.notes ?? null,
       })
       .returning();
@@ -165,19 +176,109 @@ export class ShootsService {
   }
 
   /**
-   * Photographer marks a shoot as paid. Updates status + paid_at and fires
-   * the ownership transfer for every piece of media to the client's mytrees
-   * user (if linked). Media without a linked client stays with the
-   * photographer until the client signs in for the first time, at which
-   * point the photographer can re-run mark-paid.
+   * Record a manual (off-platform) payment: cash, e-transfer, or a waiver.
+   * Photographer-only. `waived` defaults the amount to 0; `cash` defaults to
+   * the shoot's total. Flips status to paid and runs the ownership transfer.
    */
-  async markPaid(shootId: number, mytreesUserId: string) {
+  async recordPayment(
+    shootId: number,
+    mytreesUserId: string,
+    opts: { method: 'cash' | 'waived'; amountCents?: number },
+  ) {
+    await this.assertPhotographerOwns(shootId, mytreesUserId);
+    return this.applyPaid(shootId, { method: opts.method, amountCents: opts.amountCents });
+  }
+
+  /**
+   * Start an online payment: creates a Stripe Checkout session for the shoot's
+   * total and returns the hosted URL. Photographer-only. The shoot is only
+   * marked paid later, when Stripe calls our webhook.
+   */
+  async createCheckout(shootId: number, mytreesUserId: string) {
     await this.assertPhotographerOwns(shootId, mytreesUserId);
 
     const [shoot] = await this.db
       .select({
         id: shoots.id,
-        paidAt: shoots.paidAt,
+        title: shoots.title,
+        status: shoots.status,
+        totalPriceCents: shoots.totalPriceCents,
+        clientEmail: clients.email,
+      })
+      .from(shoots)
+      .innerJoin(clients, eq(shoots.clientId, clients.id))
+      .where(eq(shoots.id, shootId))
+      .limit(1);
+    if (!shoot) throw new NotFoundException('Shoot not found');
+    if (shoot.status === 'paid') throw new BadRequestException('Shoot is already paid');
+    if (!shoot.totalPriceCents || shoot.totalPriceCents <= 0) {
+      throw new BadRequestException('Set a price before collecting payment');
+    }
+
+    const origin = (process.env.FRONTEND_ORIGIN || 'http://localhost:3002')
+      .split(',')[0]!
+      .trim()
+      .replace(/\/$/, '');
+
+    const session = await this.payments.createCheckoutSession({
+      shootId: shoot.id,
+      title: shoot.title,
+      amountCents: shoot.totalPriceCents,
+      clientEmail: shoot.clientEmail,
+      successUrl: `${origin}/shoots/${shoot.id}?paid=1`,
+      cancelUrl: `${origin}/shoots/${shoot.id}?canceled=1`,
+    });
+
+    await this.db
+      .update(shoots)
+      .set({ stripeCheckoutSessionId: session.id })
+      .where(eq(shoots.id, shoot.id));
+
+    if (!session.url) throw new BadRequestException('Stripe did not return a checkout URL');
+    return { url: session.url };
+  }
+
+  /**
+   * Fulfill a verified Stripe payment (called from the webhook — no user check,
+   * the signature is the trust boundary). Idempotent: re-delivered events for an
+   * already-paid shoot are ignored.
+   */
+  async fulfillStripePayment(
+    shootId: number,
+    amountCents: number,
+    stripePaymentIntentId?: string,
+  ) {
+    const [shoot] = await this.db
+      .select({ id: shoots.id, paidAt: shoots.paidAt })
+      .from(shoots)
+      .where(eq(shoots.id, shootId))
+      .limit(1);
+    if (!shoot) {
+      this.logger.warn(`Stripe webhook for unknown shoot ${shootId} — ignoring.`);
+      return { ignored: true as const };
+    }
+    if (shoot.paidAt) return { alreadyPaid: true as const };
+
+    return this.applyPaid(shootId, {
+      method: 'stripe',
+      amountCents,
+      stripePaymentIntentId,
+    });
+  }
+
+  /**
+   * Shared "mark paid" core: transfers media ownership to the linked client (if
+   * any) and stamps status/paid_at/payment_method/amount on the shoot. Media for
+   * a not-yet-linked client stays with the photographer until they sign in.
+   */
+  private async applyPaid(
+    shootId: number,
+    opts: { method: PaymentMethod; amountCents?: number; stripePaymentIntentId?: string },
+  ) {
+    const [shoot] = await this.db
+      .select({
+        id: shoots.id,
+        totalPriceCents: shoots.totalPriceCents,
         clientUserId: clients.mytreesUserId,
       })
       .from(shoots)
@@ -186,9 +287,11 @@ export class ShootsService {
       .limit(1);
     if (!shoot) throw new NotFoundException('Shoot not found');
 
+    const amountPaidCents =
+      opts.amountCents ?? (opts.method === 'waived' ? 0 : shoot.totalPriceCents);
+
     const media = await this.db
       .select({
-        id: shootMedia.id,
         photosMediaId: shootMedia.photosMediaId,
         transferredAt: shootMedia.transferredAt,
       })
@@ -202,10 +305,7 @@ export class ShootsService {
       for (const m of media) {
         if (m.transferredAt) continue;
         try {
-          await this.mediaService.transferOwnership(
-            m.photosMediaId,
-            shoot.clientUserId,
-          );
+          await this.mediaService.transferOwnership(m.photosMediaId, shoot.clientUserId);
           transferred += 1;
         } catch (err) {
           failures.push({
@@ -218,7 +318,15 @@ export class ShootsService {
 
     const [updated] = await this.db
       .update(shoots)
-      .set({ status: 'paid', paidAt: new Date() })
+      .set({
+        status: 'paid',
+        paidAt: new Date(),
+        paymentMethod: opts.method,
+        amountPaidCents,
+        ...(opts.stripePaymentIntentId
+          ? { stripePaymentIntentId: opts.stripePaymentIntentId }
+          : {}),
+      })
       .where(eq(shoots.id, shootId))
       .returning();
 

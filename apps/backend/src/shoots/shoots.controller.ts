@@ -10,7 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Response } from 'express';
-import { IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
+import { IsIn, IsInt, IsOptional, IsString, MaxLength, Min } from 'class-validator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard.js';
 import { CurrentUser } from '../auth/decorators/current-user.decorator.js';
 import type { SessionUser } from '@cinderella/api-types';
@@ -23,7 +23,14 @@ class CreateShootDto {
   @IsOptional() @IsString() scheduledFor?: string;
   @IsOptional() @IsString() @MaxLength(200) location?: string;
   @IsOptional() @IsInt() totalPriceCents?: number;
+  @IsOptional() @IsString() @MaxLength(64) pricePackageId?: string;
   @IsOptional() @IsString() @MaxLength(2000) notes?: string;
+}
+
+class RecordPaymentDto {
+  @IsIn(['cash', 'waived']) method!: 'cash' | 'waived';
+  @IsOptional() @IsInt() @Min(0) amountCents?: number;
+  @IsOptional() @IsString() @MaxLength(500) note?: string;
 }
 
 class TransferShootDto {
@@ -67,12 +74,29 @@ export class ShootsController {
     return this.shoots.listMedia(id, user.userId);
   }
 
+  /**
+   * Record a manual payment (cash) or waive the fee. Online (Stripe) payments
+   * never come through here — they're confirmed by the webhook.
+   */
   @Post(':id/mark-paid')
   markPaid(
     @Param('id', ParseIntPipe) id: number,
+    @Body() body: RecordPaymentDto,
     @CurrentUser() user: SessionUser,
   ) {
-    return this.shoots.markPaid(id, user.userId);
+    return this.shoots.recordPayment(id, user.userId, {
+      method: body.method,
+      amountCents: body.amountCents,
+    });
+  }
+
+  /** Create a Stripe Checkout session for this shoot; returns a hosted URL. */
+  @Post(':id/checkout')
+  checkout(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: SessionUser,
+  ) {
+    return this.shoots.createCheckout(id, user.userId);
   }
 
   /**

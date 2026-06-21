@@ -11,14 +11,24 @@ const clients = ref<Client[]>([]);
 const loadingClients = ref(true);
 const submitting = ref(false);
 
+const { packages, load: loadPricing, fmt, unitLabel } = usePricing();
+
 const form = reactive({
   clientId: 0,
   title: '',
   scheduledFor: '',
   location: '',
   totalPrice: '' as string,
+  pricePackageId: '' as string,
   notes: '',
 });
+
+// Prefill the price from an advertised package. The amount stays fully editable
+// afterwards (travel, rescheduling, friends-and-family, etc.).
+const pickPackage = (id: string, priceCents: number) => {
+  form.pricePackageId = id;
+  form.totalPrice = (priceCents / 100).toFixed(2);
+};
 
 // Allow preselecting a client via ?clientId= so the "+ New shoot" button on
 // a client detail page can deep-link the dropdown.
@@ -26,6 +36,7 @@ const preselectId = Number(route.query.clientId);
 
 onMounted(async () => {
   if (!isAuthed.value) return goLogin();
+  loadPricing();
   try {
     clients.value = await api<Client[]>('/api/clients');
     if (preselectId && clients.value.some((c) => c.id === preselectId)) {
@@ -56,6 +67,7 @@ const submit = async () => {
         scheduledFor: form.scheduledFor || undefined,
         location: form.location || undefined,
         totalPriceCents: cents || undefined,
+        pricePackageId: form.pricePackageId || undefined,
         notes: form.notes || undefined,
       },
     });
@@ -93,6 +105,32 @@ const submit = async () => {
           <option :value="0" disabled>Pick a client…</option>
           <option v-for="c in clients" :key="c.id" :value="c.id">{{ c.name }} — {{ c.email }}</option>
         </select>
+      </div>
+
+      <div v-if="packages.length">
+        <label class="block text-xs font-medium text-stone-700">Package <span class="font-normal text-stone-400">(optional — prefills the price)</span></label>
+        <div class="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-3">
+          <button
+            v-for="p in packages"
+            :key="p.id"
+            type="button"
+            class="rounded-lg border px-3 py-2.5 text-left transition"
+            :class="
+              form.pricePackageId === p.id
+                ? 'border-rose-500 bg-rose-50 ring-1 ring-rose-500'
+                : 'border-stone-300 bg-white hover:border-stone-400'
+            "
+            @click="pickPackage(p.id, p.priceCents)"
+          >
+            <div class="truncate text-xs font-semibold text-stone-800">{{ p.name }}</div>
+            <div class="mt-0.5 text-xs text-stone-500">
+              <span v-if="p.startingAt">from </span>{{ fmt(p.priceCents) }}<span v-if="unitLabel(p.unit)"> {{ unitLabel(p.unit) }}</span>
+            </div>
+          </button>
+        </div>
+        <p class="mt-2 text-xs text-stone-400">
+          Baselines from your <NuxtLink to="/pricing" class="text-rose-600 hover:underline">pricing</NuxtLink>. You can override the amount below for travel, rescheduling, or special requests.
+        </p>
       </div>
 
       <div>

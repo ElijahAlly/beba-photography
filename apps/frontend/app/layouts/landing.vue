@@ -25,9 +25,9 @@ watch(() => route.fullPath, () => { menuOpen.value = false; });
 // Section anchors resolve against the landing home, so they work from any page.
 const navLinks = [
   { to: '/#work', label: 'Work' },
-  { to: '/#experience', label: 'Experience' },
-  { to: '/#clients', label: 'For clients' },
   { to: '/about', label: 'About' },
+  { to: '/pricing', label: 'Pricing' },
+  { to: '/#clients', label: 'For clients' },
 ];
 </script>
 
@@ -137,6 +137,7 @@ const navLinks = [
           <ul class="mt-4 space-y-2 text-sm text-bone-dim">
             <li><NuxtLink to="/#work" class="transition hover:text-gold">Portfolio</NuxtLink></li>
             <li><NuxtLink to="/about" class="transition hover:text-gold">About Beba</NuxtLink></li>
+            <li><NuxtLink to="/pricing" class="transition hover:text-gold">Pricing</NuxtLink></li>
             <li><NuxtLink to="/#clients" class="transition hover:text-gold">For clients</NuxtLink></li>
           </ul>
         </div>

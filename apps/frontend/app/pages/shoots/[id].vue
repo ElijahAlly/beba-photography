@@ -14,7 +14,10 @@ interface Shoot {
   scheduledFor?: string | null;
   location?: string | null;
   totalPriceCents: number;
+  pricePackageId?: string | null;
   paidAt?: string | null;
+  paymentMethod?: 'stripe' | 'cash' | 'waived' | null;
+  amountPaidCents?: number;
   notes?: string | null;
   clientId: number;
   clientName?: string | null;
@@ -39,7 +42,14 @@ const shoot = ref<Shoot | null>(null);
 const media = ref<Media[]>([]);
 const loading = ref(true);
 const lightboxIndex = ref<number | null>(null);
-const markingPaid = ref(false);
+const paying = ref(false);
+const checkingOut = ref(false);
+
+const paymentMethodLabel: Record<string, string> = {
+  stripe: 'Paid online',
+  cash: 'Paid by cash',
+  waived: 'Fee waived',
+};
 
 const fmtDate = (d?: string | null) =>
   d ? new Date(d).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : '—';
@@ -54,7 +64,7 @@ const statusStyle = (status: string) => ({
 })[status] || 'bg-stone-100 text-stone-700';
 
 const isPhotographer = computed(() => shoot.value?.viewerRole === 'photographer');
-const canMarkPaid = computed(
+const canCollect = computed(
   () => isPhotographer.value && shoot.value?.status !== 'paid' && shoot.value?.status !== 'cancelled',
 );
 
@@ -83,31 +93,60 @@ const onUploaded = async () => {
   } catch { /* uploader already toasted */ }
 };
 
-const markPaid = async () => {
-  if (!confirm('Mark this shoot as paid? This will transfer ownership of every file to the client.')) return;
-  markingPaid.value = true;
+// Manual settlement: cash or a waiver. Both flip the shoot to paid and
+// transfer file ownership to the client.
+const recordPayment = async (method: 'cash' | 'waived') => {
+  const msg =
+    method === 'waived'
+      ? 'Waive this fee and mark the shoot complete? Ownership of every file transfers to the client.'
+      : 'Record a cash payment? This marks the shoot paid and transfers every file to the client.';
+  if (!confirm(msg)) return;
+  paying.value = true;
   try {
     const res = await api<{ transferred: number; pendingClientLink: boolean; failures: any[] }>(
       `/api/shoots/${shootId.value}/mark-paid`,
-      { method: 'POST' },
+      { method: 'POST', body: { method } },
     );
+    const verb = method === 'waived' ? 'Fee waived' : 'Cash recorded';
     if (res.pendingClientLink) {
-      push('Marked paid. Client hasn\'t signed in yet — transfer will run when they do.', 'info');
+      push(`${verb}. Client hasn't signed in yet — transfer runs when they do.`, 'info');
     } else if (res.failures.length > 0) {
-      push(`Marked paid. ${res.transferred} transferred, ${res.failures.length} failed.`, 'error');
+      push(`${verb}. ${res.transferred} transferred, ${res.failures.length} failed.`, 'error');
     } else {
-      push(`Marked paid. ${res.transferred} files transferred to the client.`, 'success');
+      push(`${verb}. ${res.transferred} files transferred to the client.`, 'success');
     }
     await load();
   } catch (e: any) {
-    push(e?.data?.message || 'Mark-paid failed', 'error');
+    push(e?.data?.message || 'Could not record payment', 'error');
   } finally {
-    markingPaid.value = false;
+    paying.value = false;
+  }
+};
+
+// Online payment: hand off to Stripe Checkout. The shoot is marked paid later
+// by the webhook, so we reload on return (?paid=1).
+const collectOnline = async () => {
+  checkingOut.value = true;
+  try {
+    const res = await api<{ url: string }>(`/api/shoots/${shootId.value}/checkout`, {
+      method: 'POST',
+    });
+    window.location.href = res.url;
+  } catch (e: any) {
+    push(e?.data?.message || 'Could not start online payment', 'error');
+    checkingOut.value = false;
   }
 };
 
 onMounted(() => {
   if (!isAuthed.value) return goLogin();
+  if (route.query.paid) {
+    push('Payment received — finalizing your gallery.', 'success');
+    router.replace({ query: {} });
+  } else if (route.query.canceled) {
+    push('Online payment canceled.', 'info');
+    router.replace({ query: {} });
+  }
   load();
 });
 </script>
@@ -152,14 +191,6 @@ onMounted(() => {
           >
             View client
           </NuxtLink>
-          <button
-            v-if="canMarkPaid"
-            :disabled="markingPaid"
-            class="rounded-md bg-emerald-600 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-700 disabled:opacity-50"
-            @click="markPaid"
-          >
-            {{ markingPaid ? 'Marking…' : 'Mark as paid' }}
-          </button>
         </div>
       </div>
     </header>
@@ -182,6 +213,60 @@ onMounted(() => {
         <div class="text-[10px] uppercase tracking-wide text-stone-400">Paid</div>
         <div class="mt-1 text-sm font-medium">{{ fmtDate(shoot.paidAt) }}</div>
       </div>
+    </section>
+
+    <!-- Payment (photographer only) -->
+    <section v-if="isPhotographer" class="rounded-xl border border-stone-200 bg-white p-5">
+      <div class="flex flex-wrap items-start justify-between gap-4">
+        <div>
+          <h2 class="text-lg font-semibold">Payment</h2>
+          <p class="mt-0.5 text-sm text-stone-500">
+            <template v-if="shoot.status === 'paid'">
+              {{ paymentMethodLabel[shoot.paymentMethod || ''] || 'Paid' }}
+              · {{ fmtMoney(shoot.amountPaidCents) }}
+              <span v-if="shoot.paidAt" class="text-stone-400">on {{ fmtDate(shoot.paidAt) }}</span>
+            </template>
+            <template v-else-if="shoot.status === 'cancelled'">This shoot was cancelled.</template>
+            <template v-else>
+              Due: <span class="font-medium text-stone-700">{{ fmtMoney(shoot.totalPriceCents) }}</span>
+              — collect online, record cash, or waive the fee.
+            </template>
+          </p>
+        </div>
+        <span
+          class="shrink-0 rounded-full px-3 py-1 text-xs font-semibold"
+          :class="shoot.status === 'paid' ? 'bg-emerald-100 text-emerald-700' : 'bg-stone-100 text-stone-600'"
+        >
+          {{ shoot.status === 'paid' ? '✓ Settled' : 'Unpaid' }}
+        </span>
+      </div>
+
+      <div v-if="canCollect" class="mt-4 flex flex-wrap gap-2">
+        <button
+          :disabled="checkingOut || paying"
+          class="rounded-md bg-rose-600 px-4 py-2 text-sm font-semibold text-white hover:bg-rose-700 disabled:opacity-50"
+          @click="collectOnline"
+        >
+          {{ checkingOut ? 'Starting…' : 'Collect online (card)' }}
+        </button>
+        <button
+          :disabled="paying || checkingOut"
+          class="rounded-md border border-emerald-600 bg-white px-4 py-2 text-sm font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50"
+          @click="recordPayment('cash')"
+        >
+          {{ paying ? 'Saving…' : 'Record cash' }}
+        </button>
+        <button
+          :disabled="paying || checkingOut"
+          class="rounded-md border border-stone-300 bg-white px-4 py-2 text-sm font-medium text-stone-600 hover:bg-stone-100 disabled:opacity-50"
+          @click="recordPayment('waived')"
+        >
+          Waive fee
+        </button>
+      </div>
+      <p v-if="canCollect" class="mt-2 text-xs text-stone-400">
+        Online card payments require Stripe to be configured. Cash and waivers always work.
+      </p>
     </section>
 
     <!-- Notes (only for photographer) -->

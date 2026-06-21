@@ -76,7 +76,16 @@ export const shoots = pgTable('shoots', {
   location: text('location'),
   status: text('status').notNull().default('booked'),  // one of shootStatusValues
   totalPriceCents: bigint('total_price_cents', { mode: 'number' }).notNull().default(0),
+  // The advertised package this price was derived from (e.g. 'wedding').
+  // Prices themselves live only in env config, never the DB.
+  pricePackageId: text('price_package_id'),
   paidAt: timestamp('paid_at', { withTimezone: true }),
+  // How the shoot was settled: 'stripe' | 'cash' | 'waived'.
+  paymentMethod: text('payment_method'),
+  amountPaidCents: bigint('amount_paid_cents', { mode: 'number' }).notNull().default(0),
+  // Stripe references for reconciliation (null until an online payment starts).
+  stripeCheckoutSessionId: text('stripe_checkout_session_id'),
+  stripePaymentIntentId: text('stripe_payment_intent_id'),
   notes: text('notes'),
   metadata: jsonb('metadata').default({}).notNull(),
   createdAt: timestamp('created_at', { withTimezone: true }).defaultNow().notNull(),

@@ -5,7 +5,9 @@ import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module.js';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule);
+  // rawBody: true preserves the unparsed request body so the Stripe webhook can
+  // verify its signature (see PaymentsWebhookController).
+  const app = await NestFactory.create(AppModule, { rawBody: true });
 
   app.use(cookieParser());
   app.useGlobalPipes(

@@ -8,6 +8,7 @@ import { ShootsModule } from './shoots/shoots.module.js';
 import { ClientsModule } from './clients/clients.module.js';
 import { PhotographersModule } from './photographers/photographers.module.js';
 import { MyModule } from './my/my.module.js';
+import { PricingModule } from './pricing/pricing.module.js';
 import { HealthController } from './health/health.controller.js';
 
 // Look in the monorepo root first (pnpm runs each filter in its package's cwd,
@@ -25,6 +26,7 @@ const localEnv = resolve(process.cwd(), '.env');
     ClientsModule,
     PhotographersModule,
     MyModule,
+    PricingModule,
   ],
   controllers: [HealthController],
 })
