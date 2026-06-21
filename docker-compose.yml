@@ -34,7 +34,6 @@ services:
       - BACKEND_PORT=3001
       # In the in-Docker stack the frontend is on host :3000 (not the dev :3002
       # we use when running `pnpm dev` on the host). Override .env here.
-      - FRONTEND_ORIGIN=http://localhost:3000
       # IDP runs at the production URLs when the stack is dockerized — local
       # family-trees isn't part of this compose file.
       - IDP_AUTHORIZE_URL=https://mytrees.family/oauth/authorize
